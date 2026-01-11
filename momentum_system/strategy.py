@@ -36,9 +36,18 @@ class MomentumStrategy:
             calculate_sma(pl.col('Close'), sma_fast_window).alias('SMA_50'),
             calculate_sma(pl.col('Close'), sma_medium_window).alias('SMA_150'),
             calculate_sma(pl.col('Close'), sma_slow_window).alias('SMA_200'),
+            calculate_sma(pl.col('Close'), 10).alias('SMA_10'),  # For Trailing Stop
+            calculate_sma(pl.col('Volume'), 50).alias('Volume_SMA_50'), # Liquidity Filter
             calculate_atr(pl.col('High'), pl.col('Low'), pl.col('Close'), window=14).alias('ATR'),
             calculate_roc(pl.col('Close'), rs_lookback).alias('RS_Rating')
         ])
+        
+        # --- Liquidity Filters ---
+        # Price >= 3.00 AND 50-day Avg Volume >= 300,000
+        liquidity_cond = (
+            (pl.col('Close') >= 3.00) &
+            (pl.col('Volume_SMA_50') >= 300000)
+        )
         
         # --- Trend Template Rules (Boolean) ---
         # 1. Price > SMA 50 > SMA 150 > SMA 200 (Ideal trend alignment)
@@ -59,6 +68,11 @@ class MomentumStrategy:
             (pl.col('Close') > rolling_52w_high * 0.75)
         )
         
+        # --- Riser (Impulse) Condition ---
+        # Price must have increased by > 30% in last 63 trading days
+        # We can reuse RS_Rating (which is ROC 63) or calculate expressly
+        riser_cond = pl.col('RS_Rating') >= 30.0
+        
         # --- VCP / Consolidation Setup ---
         # "Tread": Stabilized for 4-40 days
         is_tight_expr = detect_consolidation(
@@ -70,7 +84,7 @@ class MomentumStrategy:
         )
         
         df = df.with_columns([
-            (trend_cond & prox_cond).alias('In_Uptrend'),
+            (trend_cond & prox_cond & liquidity_cond & riser_cond).alias('In_Uptrend'),
             is_tight_expr.alias('Is_Tight')
         ])
         
@@ -87,7 +101,7 @@ class MomentumStrategy:
         # Identify the resistance level (Rolling Max High of recent tight period)
         # We use a 20-day lookback for the local pivot point usually.
         df = df.with_columns([
-            pl.col('High').rolling_max(window_size=20).shift(1).alias('Pivot')
+            pl.col('High').rolling_max(window_size=63).shift(1).alias('Pivot')
         ])
         
         # Signal: Yesterday was Setup, Today Close > Pivot

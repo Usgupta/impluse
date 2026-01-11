@@ -109,11 +109,22 @@ class VectorizedBacktester:
                     continue
                     
                 # Update Trailing Stop
-                # Raise stop if price moves up. 
-                # Chandelier Exit: High - 3*ATR
-                new_trail = close - (atr * RISK_PARAMS["TRAILING_STOP_ATR_MULTIPLIER"])
-                if new_trail > pos['stop_loss']:
-                    pos['stop_loss'] = new_trail
+                # Requirement: Exit entirely if price closes below 10-day SMA (or intraday breach?)
+                # "Implement a simple Trailing Stop using the 10-day SMA to exit the entire position"
+                # Usually means if Low < SMA_10 (intraday) or Close < SMA_10.
+                # Let's assume Intraday Breach for safety (Low < SMA_10).
+                # But since SMA_10 is dynamic, we can just check against the daily SMA_10.
+                
+                sma_10 = row['SMA_10']
+                
+                # Check Trailing Stop (Dynamic SMA 10)
+                # If Low drops below SMA_10, we exit.
+                # However, we must respect the hard initial stop too. 
+                # Ideally, the Stop Price becomes max(Initial_Stop, SMA_10).
+                
+                # Update current effective stop
+                if sma_10 > pos['stop_loss']:
+                   pos['stop_loss'] = sma_10
             
             for t in cols_to_drop:
                 del positions[t]

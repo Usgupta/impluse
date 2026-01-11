@@ -1,6 +1,7 @@
 
 import logging
 import polars as pl
+import pandas as pd
 import yfinance as yf
 from pathlib import Path
 from typing import Dict, List, Optional

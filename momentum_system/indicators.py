@@ -35,7 +35,7 @@ def detect_consolidation(
     lookback_peak: int = 63,
     min_days: int = 4, 
     max_days: int = 40, 
-    tolerance: float = 0.15
+    tolerance: float = 0.25
 ) -> pl.Expr:
     """
     Detects if price is in a 'Tread' / Consolidation state.

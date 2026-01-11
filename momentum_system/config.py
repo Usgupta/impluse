@@ -12,18 +12,18 @@ os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 os.makedirs(LOG_DIR, exist_ok=True)
 
 # --- Universe ---
-# Selected high-momentum large cap tech & growth stocks for demonstration
+# Selected high-liquid US tech stocks as per requirements (20 tickers)
 UNIVERSE = [
-    "NVDA", "TSLA", "META", "AMD", "AMZN", "MSFT", "GOOGL", 
-    "PLTR", "COIN", "MSTR", "SMCI", "ARM"
+    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "NFLX",
+    "ADBE", "ORCL", "CSCO", "INTC", "AMD", "QCOM", "TXN", "AVGO",
+    "IBM", "CRM", "PLTR", "UBER" 
 ]
 
 # --- Risk Management ---
 RISK_PARAMS = {
-    "RISK_PER_TRADE_PERCENT": 0.01,       # 1% equity risk per trade
-    "MAX_ACCOUNT_RISK_PERCENT": 0.06,     # Max 6% total open risk (e.g., 6 trades)
+    "RISK_PER_TRADE_PERCENT": 0.02,       # 2% equity risk (Requirement)
+    "MAX_ACCOUNT_RISK_PERCENT": 0.12,     # Max total open risk (e.g., 6 trades)
     "STOP_LOSS_ATR_MULTIPLIER": 1.0,      # Strict VCP requirement (Low of Day / 1 ATR)
-    "TRAILING_STOP_ATR_MULTIPLIER": 3.0,  # Let winners run
     "MIN_STOP_DISTANCE_PERCENT": 0.02,    # Minimum 2% stop to avoid noise
     "MAX_STOP_DISTANCE_PERCENT": 0.10,    # Max 10% stop (Rule of thumb: never risk more than 10-12%)
 }
@@ -40,7 +40,7 @@ STRATEGY_PARAMS = {
     "LOOKBACK_PEAK": 63,                 # Look for peak in last 63 days
     "CONSOLIDATION_MIN_DAYS": 4,         # "Stabilized for 4..."
     "CONSOLIDATION_MAX_DAYS": 40,        # "...to 40 days"
-    "CONSOLIDATION_TOLERANCE": 0.15,     # Tighter consolidation (15% depth) for Tread
+    "CONSOLIDATION_TOLERANCE": 0.25,     # Requirement: < 25% retracement
     "VOLUME_SMA": 50,
 }
 
@@ -49,5 +49,5 @@ BACKTEST_PARAMS = {
     "START_DATE": "2020-01-01",
     "END_DATE": "2024-01-01",
     "INITIAL_CAPITAL": 100000.0,
-    "COMMISSION_RATE": 0.0005,           # 0.05% per trade (approx institutional rate)
+    "COMMISSION_RATE": 0.0005,           # 0.05% per trade
 }
