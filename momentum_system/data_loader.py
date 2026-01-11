@@ -1,6 +1,6 @@
 
 import logging
-import pandas as pd
+import polars as pl
 import yfinance as yf
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -13,6 +13,7 @@ class DataLoader:
     """
     Robust Data Loader with Local Caching and Validation.
     Fetches data from yfinance and caches it to CSV to minimize API calls.
+    Returns Polars DataFrames.
     """
 
     def __init__(self, cache_dir: Path = DATA_CACHE_DIR):
@@ -27,7 +28,7 @@ class DataLoader:
         start_date: str, 
         end_date: str, 
         use_cache: bool = True
-    ) -> Dict[str, pd.DataFrame]:
+    ) -> Dict[str, pl.DataFrame]:
         """
         Fetch historical data for a list of tickers.
         
@@ -38,13 +39,13 @@ class DataLoader:
             use_cache (bool): Whether to use local CSV cache.
             
         Returns:
-            Dict[str, pd.DataFrame]: Dictionary mapping ticker to DataFrame.
+            Dict[str, pl.DataFrame]: Dictionary mapping ticker to Polars DataFrame.
         """
         data_map = {}
         
         for ticker in tickers:
             df = self._get_single_ticker_data(ticker, start_date, end_date, use_cache)
-            if df is not None and not df.empty:
+            if df is not None and not df.is_empty():
                 data_map[ticker] = df
                 logger.info(f"Successfully loaded data for {ticker}: {len(df)} rows.")
             else:
@@ -58,7 +59,7 @@ class DataLoader:
         start_date: str, 
         end_date: str, 
         use_cache: bool
-    ) -> Optional[pd.DataFrame]:
+    ) -> Optional[pl.DataFrame]:
         """
         Helper to fetch data for a single ticker with caching logic.
         """
@@ -68,11 +69,22 @@ class DataLoader:
         if use_cache and cache_file.exists():
             try:
                 logger.debug(f"Loading {ticker} from cache: {cache_file}")
-                df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+                # Polars read_csv is very fast
+                df = pl.read_csv(cache_file, try_parse_dates=True)
                 
-                # Filter by date range (naive filter implementation for simplicity)
-                df = df[(df.index >= start_date) & (df.index <= end_date)]
-                
+                # Check for Date column (Polars doesn't implicitly index by Date)
+                if 'Date' in df.columns:
+                    # Filter by date range
+                    # Ensure Date is Date type (read_csv might infer Datetime)
+                    df = df.filter(
+                        (pl.col("Date") >= pl.lit(start_date).str.to_date()) & 
+                        (pl.col("Date") <= pl.lit(end_date).str.to_date())
+                    )
+                    # Sort by Date just in case
+                    df = df.sort("Date")
+                else:
+                     logger.warning(f"Cache for {ticker} missing Date column.")
+
                 if self._validate_data(df, ticker):
                     return df
                 else:
@@ -80,23 +92,34 @@ class DataLoader:
             except Exception as e:
                 logger.error(f"Error reading cache for {ticker}: {e}")
 
-        # 2. Fetch from API
+        # 2. Fetch from API (Returns Pandas)
         logger.info(f"Fetching {ticker} from yfinance...")
         try:
-            # auto_adjust=True handles splits/dividends nicely
-            df = yf.download(ticker, start=start_date, end=end_date, progress=False, auto_adjust=True)
+            # yfinance returns Pandas DataFrame
+            pd_df = yf.download(ticker, start=start_date, end=end_date, progress=False, auto_adjust=True)
             
-            # yfinance returns MultiIndex columns if multiple tickers, but we are doing one by one.
-            # Flatten just in case.
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.droplevel(1) # Drop Ticker level if present
+            # Reset index to make Date a column (Polars prefers no index)
+            pd_df = pd_df.reset_index()
+
+            # yfinance MultiIndex handling
+            if isinstance(pd_df.columns, pd.MultiIndex):
+                # Flatten or drop levels if needed, but reset_index usually handles the Ticker level issue somewhat
+                # Better: just convert to Polars and clean up
+                pd_df.columns = [c[0] if isinstance(c, tuple) else c for c in pd_df.columns]
+
+            # Convert to Polars
+            df = pl.from_pandas(pd_df)
+            
+            # Ensure Date column is proper Date type (yfinance might give Datetime)
+            if 'Date' in df.columns:
+                df = df.with_columns(pl.col("Date").cast(pl.Date))
 
             # 3. Clean and Validate
             df = self._clean_data(df)
             
             if self._validate_data(df, ticker):
                 # 4. Save to Cache
-                df.to_csv(cache_file)
+                df.write_csv(cache_file)
                 logger.debug(f"Saved {ticker} to cache.")
                 return df
             
@@ -105,24 +128,24 @@ class DataLoader:
             
         return None
 
-    def _clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _clean_data(self, df: pl.DataFrame) -> pl.DataFrame:
         """
-        Clean raw data: remove zero volume, handle NaNs.
+        Clean raw data: remove zero volume, handle Nulls.
         """
-        # Remove rows with zero volume (non-trading days)
+        # Remove rows with zero volume
         if 'Volume' in df.columns:
-            df = df[df['Volume'] > 0]
+            df = df.filter(pl.col('Volume') > 0)
         
-        # Remove rows with any NaN values
-        df = df.dropna()
+        # Remove rows with any Null values
+        df = df.drop_nulls()
         
         return df
 
-    def _validate_data(self, df: pd.DataFrame, ticker: str) -> bool:
+    def _validate_data(self, df: pl.DataFrame, ticker: str) -> bool:
         """
         Check data quality.
         """
-        if df.empty:
+        if df.is_empty():
             logger.warning(f"Validation failed for {ticker}: DataFrame is empty.")
             return False
             
@@ -133,9 +156,8 @@ class DataLoader:
             logger.warning(f"Validation failed for {ticker}: Missing columns {missing_cols}")
             return False
             
-        # Check for sufficient data length (arbitrary minimum for SMA calc)
-        # Ideally should check against config lookbacks, but keeping simple here.
         if len(df) < 50:
             logger.warning(f"Validation warning for {ticker}: Only {len(df)} rows (might be insufficient for indicators).")
         
         return True
+

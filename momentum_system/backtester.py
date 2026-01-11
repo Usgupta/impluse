@@ -1,4 +1,5 @@
 
+import polars as pl
 import pandas as pd
 import numpy as np
 from typing import Dict, List
@@ -22,17 +23,27 @@ class VectorizedBacktester:
         self.strategy = MomentumStrategy()
         
     @measure_latency
-    def run(self, data_map: Dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def run(self, data_map: Dict[str, pl.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Runs the backtest across the universe.
         Returns: (metrics_df, trade_log_df)
         """
         logger.info(f"Starting Backtest on {len(data_map)} tickers...")
         
-        # 1. Prepare Data & Signals
+        # 1. Prepare Data & Signals (Hybrid: Polars Calc -> Pandas Execution)
         processed_data = {}
-        for ticker, df in data_map.items():
-            processed_data[ticker] = self.strategy.prepare_data(df)
+        for ticker, df_polars in data_map.items():
+            # Run Strategy in Polars (Fast)
+            processed_polars = self.strategy.prepare_data(df_polars)
+            
+            # Convert to Pandas for iteration (Legacy Compatibility)
+            # Ensure Date column becomes Index
+            df_pandas = processed_polars.to_pandas()
+            if 'Date' in df_pandas.columns:
+                df_pandas['Date'] = pd.to_datetime(df_pandas['Date'])
+                df_pandas.set_index('Date', inplace=True)
+            
+            processed_data[ticker] = df_pandas
             
         # 2. Portfolio Loop
         # We need a unified timeline

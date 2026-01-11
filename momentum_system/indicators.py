@@ -1,40 +1,42 @@
+import polars as pl
+from .logger_setup import measure_latency, setup_logger
 
-import pandas as pd
-import numpy as np
-from typing import Tuple
+logger = setup_logger(name=__name__)
 
-def calculate_sma(series: pd.Series, window: int) -> pd.Series:
+@measure_latency
+def calculate_sma(expr: pl.Expr, window: int) -> pl.Expr:
     """Calculates Simple Moving Average."""
-    return series.rolling(window=window).mean()
+    return expr.rolling_mean(window_size=window)
 
-def calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14) -> pd.Series:
+@measure_latency
+def calculate_atr(high: pl.Expr, low: pl.Expr, close: pl.Expr, window: int = 14) -> pl.Expr:
     """
     Calculates Average True Range (ATR).
     TR = Max(High-Low, |High-PrevClose|, |Low-PrevClose|)
     ATR = Smoothed TR
     """
     prev_close = close.shift(1)
+    
     tr1 = high - low
     tr2 = (high - prev_close).abs()
     tr3 = (low - prev_close).abs()
     
-    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    # Max of the three
+    tr = pl.max_horizontal(tr1, tr2, tr3)
     
-    # Wilder's Smoothing (pandas ewm with alpha=1/window is close approximation)
-    # Using simple rolling mean for standard ATR definition or EWM
-    # Wilder's smoothing: ATR = (Prev ATR * (n-1) + TR) / n
-    # This is equivalent to pandas ewm(alpha=1/n, adjust=False)
-    atr = tr.ewm(alpha=1/window, adjust=False).mean()
-    return atr
+    # Wilder's Smoothing: ewm(alpha=1/window, adjust=False)
+    # Polars ewm_mean supports this directly
+    return tr.ewm_mean(alpha=1/window, adjust=False, min_periods=window)
 
+@measure_latency
 def detect_consolidation(
-    high: pd.Series, 
-    close: pd.Series, 
+    high: pl.Expr, 
+    close: pl.Expr, 
     lookback_peak: int = 63,
     min_days: int = 4, 
     max_days: int = 40, 
     tolerance: float = 0.15
-) -> pd.Series:
+) -> pl.Expr:
     """
     Detects if price is in a 'Tread' / Consolidation state.
     
@@ -56,7 +58,7 @@ def detect_consolidation(
         pd.Series: Boolean series indicating if the day is part of a valid consolidation.
     """
     # 1. Rolling Max High
-    rolling_peak = high.rolling(window=lookback_peak, min_periods=1).max()
+    rolling_peak = high.rolling_max(window_size=lookback_peak, min_periods=1)
     
     # 2. Drawdown from Peak (using Close price to avoid intraday wicks disqualifying valid bases)
     # Use Close or High? VCP usually implies tight closes. Let's use Close relative to Peak High.
@@ -66,12 +68,15 @@ def detect_consolidation(
     is_tight = drawdown_pct <= tolerance
     
     # 4. Has it been tight for at least min_days?
-    # We use a rolling sum of the boolean 'is_tight'. 
-    # If rolling_sum(is_tight, window=min_days) == min_days, then we have been tight for at least min_days.
-    stable_period = is_tight.rolling(window=min_days, min_periods=1).sum() == min_days
+    # Rolling sum of booleans (treated as 0/1)
+    # cast to integer (0/1) then rolling_sum
+    stable_period = is_tight.cast(pl.Int8).rolling_sum(window_size=min_days, min_periods=1) == min_days
     
     return stable_period
 
-def calculate_roc(series: pd.Series, window: int) -> pd.Series:
+@measure_latency
+def calculate_roc(expr: pl.Expr, window: int) -> pl.Expr:
     """Rate of Change Percentage."""
-    return series.pct_change(periods=window) * 100
+    # (Price / Price.shift(n)) - 1
+    # or pct_change logic
+    return (expr / expr.shift(window) - 1.0) * 100.0

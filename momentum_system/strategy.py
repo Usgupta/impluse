@@ -1,11 +1,11 @@
 
-import pandas as pd
+import polars as pl
 import numpy as np
 from .config import STRATEGY_PARAMS
 from .indicators import calculate_sma, calculate_atr, detect_consolidation, calculate_roc
-from .logger_setup import setup_logger
+from .logger_setup import setup_logger, measure_latency
 
-logger = setup_logger(name="MomentumStrategy")
+logger = setup_logger(name=__name__)
 
 class MomentumStrategy:
     """
@@ -15,57 +15,70 @@ class MomentumStrategy:
     def __init__(self, params: dict = STRATEGY_PARAMS):
         self.params = params
 
-    def prepare_data(self, df: pd.DataFrame) -> pd.DataFrame:
+    @measure_latency
+    def prepare_data(self, df: pl.DataFrame) -> pl.DataFrame:
         """
         Calculates all indicators and signal flags. 
         Returns df with added columns.
         """
-        df = df.copy()
+        # Polars DataFrames are immutable-like when adding columns, creating new DF or lazy
+        # Since I'm in eager mode (DataFrame), with_columns returns new DF
         
         # --- Indicators ---
-        df['SMA_50'] = calculate_sma(df['Close'], self.params['SMA_FAST'])
-        df['SMA_150'] = calculate_sma(df['Close'], self.params['SMA_MEDIUM'])
-        df['SMA_200'] = calculate_sma(df['Close'], self.params['SMA_SLOW'])
-        df['ATR'] = calculate_atr(df['High'], df['Low'], df['Close'], window=14)
+        # We can construct a list of expressions to execute in parallel
         
-        # Relative Strength (Proxy: ROC 63 days)
-        df['RS_Rating'] = calculate_roc(df['Close'], self.params['RS_LOOKBACK'])
+        sma_fast_window = self.params['SMA_FAST']
+        sma_medium_window = self.params['SMA_MEDIUM']
+        sma_slow_window = self.params['SMA_SLOW']
+        rs_lookback = self.params['RS_LOOKBACK']
+        
+        df = df.with_columns([
+            calculate_sma(pl.col('Close'), sma_fast_window).alias('SMA_50'),
+            calculate_sma(pl.col('Close'), sma_medium_window).alias('SMA_150'),
+            calculate_sma(pl.col('Close'), sma_slow_window).alias('SMA_200'),
+            calculate_atr(pl.col('High'), pl.col('Low'), pl.col('Close'), window=14).alias('ATR'),
+            calculate_roc(pl.col('Close'), rs_lookback).alias('RS_Rating')
+        ])
         
         # --- Trend Template Rules (Boolean) ---
         # 1. Price > SMA 50 > SMA 150 > SMA 200 (Ideal trend alignment)
-        # Note: Making it a bit looser for demo: Price > 150 > 200 is strict enough foundation.
         
         trend_cond = (
-            (df['Close'] > df['SMA_50']) &
-            (df['SMA_50'] > df['SMA_150']) &
-            (df['SMA_150'] > df['SMA_200'])
+            (pl.col('Close') > pl.col('SMA_50')) &
+            (pl.col('SMA_50') > pl.col('SMA_150')) &
+            (pl.col('SMA_150') > pl.col('SMA_200'))
         )
         
         # 52-Week High/Low Logic (Approximation)
-        rolling_52w_low = df['Low'].rolling(window=252).min()
-        rolling_52w_high = df['High'].rolling(window=252).max()
+        rolling_52w_low = pl.col('Low').rolling_min(window_size=252)
+        rolling_52w_high = pl.col('High').rolling_max(window_size=252)
         
         # Within 25% of High, > 25% off Low
         prox_cond = (
-            (df['Close'] > rolling_52w_low * 1.25) & 
-            (df['Close'] > rolling_52w_high * 0.75)
+            (pl.col('Close') > rolling_52w_low * 1.25) & 
+            (pl.col('Close') > rolling_52w_high * 0.75)
         )
-        
-        df['In_Uptrend'] = trend_cond & prox_cond
         
         # --- VCP / Consolidation Setup ---
         # "Tread": Stabilized for 4-40 days
-        df['Is_Tight'] = detect_consolidation(
-            df['High'], 
-            df['Close'], 
+        is_tight_expr = detect_consolidation(
+            pl.col('High'), 
+            pl.col('Close'), 
             lookback_peak=self.params['LOOKBACK_PEAK'],
             min_days=self.params['CONSOLIDATION_MIN_DAYS'],
             tolerance=self.params['CONSOLIDATION_TOLERANCE']
         )
         
+        df = df.with_columns([
+            (trend_cond & prox_cond).alias('In_Uptrend'),
+            is_tight_expr.alias('Is_Tight')
+        ])
+        
         # --- Signal Generation ---
         # Setup: Uptrend + Tightness
-        df['Setup'] = df['In_Uptrend'] & df['Is_Tight']
+        df = df.with_columns(
+            (pl.col('In_Uptrend') & pl.col('Is_Tight')).alias('Setup')
+        )
         
         # Trigger: Breakout from the consolidation.
         # Logic: If we were in a Setup yesterday (or recently), and today we break above the 
@@ -73,15 +86,27 @@ class MomentumStrategy:
         
         # Identify the resistance level (Rolling Max High of recent tight period)
         # We use a 20-day lookback for the local pivot point usually.
-        df['Pivot'] = df['High'].rolling(20).max().shift(1)
+        df = df.with_columns([
+            pl.col('High').rolling_max(window_size=20).shift(1).alias('Pivot')
+        ])
         
         # Signal: Yesterday was Setup, Today Close > Pivot
         # Using shift(1) for 'Setup' because we trade on the day *after* setup is confirmed/ongoing
         # or if we are IN the setup and break out.
         
-        df['Buy_Signal'] = (
-            (df['Setup'].shift(1) == True) & 
-            (df['Close'] > df['Pivot'])
+        df = df.with_columns(
+            (
+                (pl.col('Setup').shift(1)) & 
+                (pl.col('Close') > pl.col('Pivot'))
+            ).alias('Buy_Signal')
         )
+
+        # Clean up Nulls that might propagate from rolling windows
+        # Strategy usually needs full history, but signals at the start will be null.
+        # Fill null booleans with False to be safe?
+        df = df.with_columns([
+            pl.col('Buy_Signal').fill_null(False),
+            pl.col('Setup').fill_null(False)
+        ])
         
         return df

@@ -1,8 +1,9 @@
 
 import pandas as pd
+import polars as pl
 import mplfinance as mpf
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Union
 from .logger_setup import setup_logger, measure_latency
 
 logger = setup_logger(name=__name__)
@@ -17,10 +18,17 @@ class TradeVisualizer:
         self.output_dir.mkdir(exist_ok=True)
         
     @measure_latency
-    def plot_trade(self, ticker: str, df: pd.DataFrame, trade_details: Dict):
+    def plot_trade(self, ticker: str, df: Union[pd.DataFrame, pl.DataFrame], trade_details: Dict):
         """
         Plots a candlestick chart with overlays for a specific trade.
         """
+        # Handle Polars Input
+        if isinstance(df, pl.DataFrame):
+            df = df.to_pandas()
+            if 'Date' in df.columns:
+                df['Date'] = pd.to_datetime(df['Date'])
+                df.set_index('Date', inplace=True)
+
         entry_date = trade_details['Entry Date']
         exit_date = trade_details['Exit Date']
         
