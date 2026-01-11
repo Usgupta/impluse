@@ -1,8 +1,28 @@
-
+import time
+import functools
 import logging
 import sys
 from pathlib import Path
 from .config import LOG_DIR
+
+def measure_latency(func):
+    """
+    Decorator to measure and log the execution time of a function.
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.perf_counter()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            end_time = time.perf_counter()
+            duration_ms = (end_time - start_time) * 1000
+            
+            # Get logger for the module where the function is defined
+            # If unable to get specific logger, fall back to root or named logger
+            logger = logging.getLogger(func.__module__)
+            logger.info(f"Performance: {func.__qualname__} took {duration_ms:.2f} ms")
+    return wrapper
 
 def setup_logger(name: str = "momentum_system", log_file: str = "system.log", level=logging.INFO):
     """
@@ -25,7 +45,7 @@ def setup_logger(name: str = "momentum_system", log_file: str = "system.log", le
 
     # Formatter
     formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        '%(asctime)s.%(msecs)03d - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 

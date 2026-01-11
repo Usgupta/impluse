@@ -3,9 +3,9 @@ import pandas as pd
 import mplfinance as mpf
 from pathlib import Path
 from typing import Dict
-from .logger_setup import setup_logger
+from .logger_setup import setup_logger, measure_latency
 
-logger = setup_logger(name="TradeVisualizer")
+logger = setup_logger(name=__name__)
 
 class TradeVisualizer:
     """
@@ -16,6 +16,7 @@ class TradeVisualizer:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         
+    @measure_latency
     def plot_trade(self, ticker: str, df: pd.DataFrame, trade_details: Dict):
         """
         Plots a candlestick chart with overlays for a specific trade.

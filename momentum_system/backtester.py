@@ -3,11 +3,11 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List
 from .config import BACKTEST_PARAMS, RISK_PARAMS
-from .logger_setup import setup_logger
+from .logger_setup import setup_logger, measure_latency
 from .risk_manager import RiskManager
 from .strategy import MomentumStrategy
 
-logger = setup_logger(name="Backtester")
+logger = setup_logger(name=__name__)
 
 class VectorizedBacktester:
     """
@@ -21,6 +21,7 @@ class VectorizedBacktester:
         self.risk_manager = RiskManager(account_size=initial_capital)
         self.strategy = MomentumStrategy()
         
+    @measure_latency
     def run(self, data_map: Dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Runs the backtest across the universe.

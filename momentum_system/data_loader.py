@@ -5,9 +5,9 @@ import yfinance as yf
 from pathlib import Path
 from typing import Dict, List, Optional
 from .config import DATA_CACHE_DIR
-from .logger_setup import setup_logger
+from .logger_setup import setup_logger, measure_latency
 
-logger = setup_logger(name="DataLoader")
+logger = setup_logger(name=__name__)
 
 class DataLoader:
     """
@@ -20,6 +20,7 @@ class DataLoader:
         if not self.cache_dir.exists():
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+    @measure_latency
     def fetch_data(
         self, 
         tickers: List[str], 
