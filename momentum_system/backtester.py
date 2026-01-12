@@ -3,9 +3,9 @@ import polars as pl
 import pandas as pd
 import numpy as np
 from typing import Dict, List
-from .config import BACKTEST_PARAMS, RISK_PARAMS
-from .logger_setup import setup_logger, measure_latency
-from .risk_manager import RiskManager
+from .common.config import BACKTEST_PARAMS, RISK_PARAMS
+from .common.logger_setup import setup_logger, measure_latency
+from .executor import Executor
 from .strategy import MomentumStrategy
 
 logger = setup_logger(name=__name__)
@@ -19,7 +19,7 @@ class VectorizedBacktester:
     
     def __init__(self, initial_capital: float = BACKTEST_PARAMS["INITIAL_CAPITAL"]):
         self.initial_capital = initial_capital
-        self.risk_manager = RiskManager(account_size=initial_capital)
+        self.executor = Executor(account_size=initial_capital)
         self.strategy = MomentumStrategy()
         
     @measure_latency
@@ -71,7 +71,7 @@ class VectorizedBacktester:
                     pass 
                     
             equity_curve.append({'Date': date, 'Equity': current_equity})
-            self.risk_manager.account_size = current_equity # Dynamic compounding
+            self.executor.account_size = current_equity # Dynamic compounding
             
             # --- Process Exits First ---
             # Exits: Stop Loss or Trailing Stop
@@ -151,9 +151,9 @@ class VectorizedBacktester:
                     atr = row['ATR']
                     
                     # Validate Risk
-                    valid = self.risk_manager.validate_trade_setup(entry_price, initial_stop, atr, ticker)
+                    valid = self.executor.validate_trade_setup(entry_price, initial_stop, atr, ticker)
                     if valid:
-                        shares = self.risk_manager.calculate_position_size(entry_price, initial_stop)
+                        shares = self.executor.calculate_position_size(entry_price, initial_stop)
                         cost = shares * entry_price
                         
                         if shares > 0 and cash >= cost:

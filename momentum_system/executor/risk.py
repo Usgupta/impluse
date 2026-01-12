@@ -1,13 +1,18 @@
 
-from .config import RISK_PARAMS
-from .logger_setup import setup_logger
+from ..common.config import RISK_PARAMS
+from ..common.logger_setup import setup_logger
 
-logger = setup_logger(name="RiskManager")
+logger = setup_logger(name="Executor")
 
-class RiskManager:
+class Executor:
     """
-    Enforces risk constraints and calculates position sizing.
-    Differentiation: Swappable logic and strict ATR checks.
+    Phase IV: The Executor
+    Handles risk management, position sizing, and trade execution logic.
+    
+    Per Technical Test Requirements:
+    - Risk Management: Fixed Risk - Limit 2% of account equity per trade
+    - Stop Loss Placement: LOD of trigger candle, constraint: (Entry - Stop) <= 1.0 × ATR(14)
+    - Exit Logic: Trailing Stop using 10-day SMA
     """
     
     def __init__(self, account_size: float = 100000.0):
@@ -18,7 +23,16 @@ class RiskManager:
     def validate_trade_setup(self, entry_price: float, stop_loss: float, atr: float, ticker: str = "") -> bool:
         """
         Validates if the trade meets the strict risk criteria.
-        Rule: Stop Distance <= 1.0 * ATR
+        Rule: Stop Distance <= 1.0 × ATR
+        
+        Args:
+            entry_price: Proposed entry price
+            stop_loss: Proposed stop loss price (LOD of signal candle)
+            atr: Current ATR(14) value
+            ticker: Stock ticker for logging
+            
+        Returns:
+            True if trade setup is valid, False otherwise
         """
         if entry_price <= 0 or stop_loss <= 0 or atr <= 0:
             logger.warning(f"Invalid inputs for {ticker}: Entry={entry_price}, Stop={stop_loss}, ATR={atr}")
@@ -44,8 +58,15 @@ class RiskManager:
     def calculate_position_size(self, entry_price: float, stop_loss: float) -> int:
         """
         Calculates number of shares based on Fixed Fractional Risk.
-        Risk Amount = Account Size * Risk%
+        Risk Amount = Account Size × Risk%
         Shares = Risk Amount / (Entry - Stop)
+        
+        Args:
+            entry_price: Entry price per share
+            stop_loss: Stop loss price per share
+            
+        Returns:
+            Number of shares to purchase
         """
         risk_amount = self.account_size * self.risk_per_trade_pct
         risk_per_share = entry_price - stop_loss
@@ -61,3 +82,20 @@ class RiskManager:
         #    shares = int((self.account_size * 0.25) / entry_price)
         
         return shares
+
+    def check_exit_signal(self, current_price: float, sma_10: float) -> bool:
+        """
+        Checks if exit condition is met (Trailing Stop).
+        Exit Rule: Close price falls below 10-day SMA
+        
+        Args:
+            current_price: Current closing price
+            sma_10: 10-day Simple Moving Average
+            
+        Returns:
+            True if should exit, False otherwise
+        """
+        if sma_10 <= 0:
+            return False
+            
+        return current_price < sma_10

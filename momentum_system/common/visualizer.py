@@ -1,9 +1,9 @@
-
 import pandas as pd
 import polars as pl
-import mplfinance as mpf
+import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import Dict, Union
+from .config import BASE_DIR
 from .logger_setup import setup_logger, measure_latency
 
 logger = setup_logger(name=__name__)

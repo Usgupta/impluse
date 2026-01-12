@@ -1,32 +1,42 @@
 
 import polars as pl
 import numpy as np
-from .config import STRATEGY_PARAMS
-from .indicators import calculate_sma, calculate_atr, detect_consolidation, calculate_roc
-from .logger_setup import setup_logger, measure_latency
+from .common.config import STRATEGY_PARAMS
+from .common.indicators import calculate_sma, calculate_atr, calculate_roc
+from .screener import Screener
+from .signaller import Signaller
+from .common.logger_setup import setup_logger, measure_latency
 
 logger = setup_logger(name=__name__)
 
 class MomentumStrategy:
     """
-    Implements Minervini-style Trend & VCP Logic.
+    Orchestrates the three-phase trading system:
+    1. Screener: Applies liquidity and trend filters
+    2. Signaller: Detects momentum patterns and generates signals
+    3. Executor: Handles risk management and trade execution (used by backtester)
+    
+    This class maintains backward compatibility by providing the prepare_data() method
+    expected by the backtester.
     """
     
     def __init__(self, params: dict = STRATEGY_PARAMS):
         self.params = params
+        self.screener = Screener(params)
+        self.signaller = Signaller(params)
 
     @measure_latency
     def prepare_data(self, df: pl.DataFrame) -> pl.DataFrame:
         """
-        Calculates all indicators and signal flags. 
+        Calculates all indicators and signal flags using the three-module architecture.
         Returns df with added columns.
+        
+        Flow:
+        1. Calculate base technical indicators (SMA, ATR, ROC)
+        2. Apply Screener filters (liquidity, trend)
+        3. Generate Signaller signals (Riser, Tread, entry trigger)
         """
-        # Polars DataFrames are immutable-like when adding columns, creating new DF or lazy
-        # Since I'm in eager mode (DataFrame), with_columns returns new DF
-        
-        # --- Indicators ---
-        # We can construct a list of expressions to execute in parallel
-        
+        # --- Step 1: Calculate Base Indicators ---
         sma_fast_window = self.params['SMA_FAST']
         sma_medium_window = self.params['SMA_MEDIUM']
         sma_slow_window = self.params['SMA_SLOW']
@@ -36,91 +46,16 @@ class MomentumStrategy:
             calculate_sma(pl.col('Close'), sma_fast_window).alias('SMA_50'),
             calculate_sma(pl.col('Close'), sma_medium_window).alias('SMA_150'),
             calculate_sma(pl.col('Close'), sma_slow_window).alias('SMA_200'),
-            calculate_sma(pl.col('Close'), 10).alias('SMA_10'),  # For Trailing Stop
-            calculate_sma(pl.col('Volume'), 50).alias('Volume_SMA_50'), # Liquidity Filter
-            calculate_atr(pl.col('High'), pl.col('Low'), pl.col('Close'), window=14).alias('ATR'),
-            calculate_roc(pl.col('Close'), rs_lookback).alias('RS_Rating')
+            calculate_sma(pl.col('Close'), 10).alias('SMA_10'),  # For Trailing Stop (Executor)
+            calculate_sma(pl.col('Volume'), 50).alias('Volume_SMA_50'), # For Liquidity Filter (Screener)
+            calculate_atr(pl.col('High'), pl.col('Low'), pl.col('Close'), window=14).alias('ATR'),  # For Risk (Executor)
+            calculate_roc(pl.col('Close'), rs_lookback).alias('RS_Rating')  # For Riser detection (Signaller)
         ])
         
-        # --- Liquidity Filters ---
-        # Price >= 3.00 AND 50-day Avg Volume >= 300,000
-        liquidity_cond = (
-            (pl.col('Close') >= 3.00) &
-            (pl.col('Volume_SMA_50') >= 300000)
-        )
+        # --- Step 2: Apply Screener Filters (Phase II) ---
+        df = self.screener.apply_filters(df)
         
-        # --- Trend Template Rules (Boolean) ---
-        # 1. Price > SMA 50 > SMA 150 > SMA 200 (Ideal trend alignment)
-        
-        trend_cond = (
-            (pl.col('Close') > pl.col('SMA_50')) &
-            (pl.col('SMA_50') > pl.col('SMA_150')) &
-            (pl.col('SMA_150') > pl.col('SMA_200'))
-        )
-        
-        # 52-Week High/Low Logic (Approximation)
-        rolling_52w_low = pl.col('Low').rolling_min(window_size=252)
-        rolling_52w_high = pl.col('High').rolling_max(window_size=252)
-        
-        # Within 25% of High, > 25% off Low
-        prox_cond = (
-            (pl.col('Close') > rolling_52w_low * 1.25) & 
-            (pl.col('Close') > rolling_52w_high * 0.75)
-        )
-        
-        # --- Riser (Impulse) Condition ---
-        # Price must have increased by > 30% in last 63 trading days
-        # We can reuse RS_Rating (which is ROC 63) or calculate expressly
-        riser_cond = pl.col('RS_Rating') >= 30.0
-        
-        # --- VCP / Consolidation Setup ---
-        # "Tread": Stabilized for 4-40 days
-        is_tight_expr = detect_consolidation(
-            pl.col('High'), 
-            pl.col('Close'), 
-            lookback_peak=self.params['LOOKBACK_PEAK'],
-            min_days=self.params['CONSOLIDATION_MIN_DAYS'],
-            tolerance=self.params['CONSOLIDATION_TOLERANCE']
-        )
-        
-        df = df.with_columns([
-            (trend_cond & prox_cond & liquidity_cond & riser_cond).alias('In_Uptrend'),
-            is_tight_expr.alias('Is_Tight')
-        ])
-        
-        # --- Signal Generation ---
-        # Setup: Uptrend + Tightness
-        df = df.with_columns(
-            (pl.col('In_Uptrend') & pl.col('Is_Tight')).alias('Setup')
-        )
-        
-        # Trigger: Breakout from the consolidation.
-        # Logic: If we were in a Setup yesterday (or recently), and today we break above the 
-        # local resistance (Rolling Max of the consolidation window), that's a buy.
-        
-        # Identify the resistance level (Rolling Max High of recent tight period)
-        # We use a 20-day lookback for the local pivot point usually.
-        df = df.with_columns([
-            pl.col('High').rolling_max(window_size=63).shift(1).alias('Pivot')
-        ])
-        
-        # Signal: Yesterday was Setup, Today Close > Pivot
-        # Using shift(1) for 'Setup' because we trade on the day *after* setup is confirmed/ongoing
-        # or if we are IN the setup and break out.
-        
-        df = df.with_columns(
-            (
-                (pl.col('Setup').shift(1)) & 
-                (pl.col('Close') > pl.col('Pivot'))
-            ).alias('Buy_Signal')
-        )
-
-        # Clean up Nulls that might propagate from rolling windows
-        # Strategy usually needs full history, but signals at the start will be null.
-        # Fill null booleans with False to be safe?
-        df = df.with_columns([
-            pl.col('Buy_Signal').fill_null(False),
-            pl.col('Setup').fill_null(False)
-        ])
+        # --- Step 3: Generate Signals (Phase III) ---
+        df = self.signaller.generate_signals(df)
         
         return df
