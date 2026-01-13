@@ -60,7 +60,16 @@ class Signaller:
         )
         
         # --- Entry Trigger: Breakout from Consolidation ---
-        # Identify the resistance level (Pivot = Rolling Max High over lookback)
+        # Per requirement line 39: "Signal a BUY when the price breaks above the High 
+        # of the consolidation range (the peak price achieved during the last 63 trading days)"
+        # 
+        # INTERPRETATION: The parenthetical phrase defines the consolidation range high
+        # as the 63-day peak (which is also the reference peak used in Riser/Tread logic).
+        # This means entry requires full recovery to the 63-day high.
+        #
+        # NOTE: This differs from standard VCP methodology where entry would occur at
+        # the consolidation high (may be lower than the impulse high). However, the
+        # literal requirement specifies "the peak price achieved during the last 63 trading days."
         df = df.with_columns([
             pl.col('High').rolling_max(window_size=63).shift(1).alias('Pivot')
         ])
