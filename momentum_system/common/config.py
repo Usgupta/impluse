@@ -22,7 +22,7 @@ UNIVERSE = [
 # --- Risk Management ---
 RISK_PARAMS = {
     "RISK_PER_TRADE_PERCENT": 0.02,       # 2% equity risk (Requirement)
-    "MAX_ACCOUNT_RISK_PERCENT": 0.12,     # Max total open risk (e.g., 6 trades)
+    "MAX_ACCOUNT_RISK_PERCENT": 0.16,     # Max total open risk (e.g., 8 trades)
     "STOP_LOSS_ATR_MULTIPLIER": 1.0,      # Strict VCP requirement (Low of Day / 1 ATR)
     "MIN_STOP_DISTANCE_PERCENT": 0.02,    # Minimum 2% stop to avoid noise
     "MAX_STOP_DISTANCE_PERCENT": 0.10,    # Max 10% stop (Rule of thumb: never risk more than 10-12%)
@@ -46,8 +46,8 @@ STRATEGY_PARAMS = {
 
 # --- Backtest Configuration ---
 BACKTEST_PARAMS = {
-    "START_DATE": "2020-01-01",
-    "END_DATE": "2024-01-01",
+    "START_DATE": "2016-01-01",
+    "END_DATE": "2021-12-31",
     "INITIAL_CAPITAL": 100000.0,
     "COMMISSION_RATE": 0.0005,           # 0.05% per trade
 }

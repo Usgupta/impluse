@@ -1,10 +1,10 @@
 
 import pandas as pd
-from momentum_system.config import UNIVERSE, BACKTEST_PARAMS
-from momentum_system.data_loader import DataLoader
+from momentum_system.common.config import UNIVERSE, BACKTEST_PARAMS
+from momentum_system.common.data_loader import DataLoader
 from momentum_system.backtester import VectorizedBacktester
-from momentum_system.visualizer import TradeVisualizer
-from momentum_system.logger_setup import setup_logger
+from momentum_system.common.visualizer import TradeVisualizer
+from momentum_system.common.logger_setup import setup_logger
 
 logger = setup_logger("VisualProof")
 
